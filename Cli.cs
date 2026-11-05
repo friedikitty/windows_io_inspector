@@ -1,5 +1,3 @@
-using System.Security.Principal;
-
 namespace IoInspector;
 
 public static class Cli
