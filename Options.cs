@@ -4,6 +4,7 @@ public sealed class Options
 {
     public bool Cli;
     public bool SelfTest;
+    public bool NoElevate;    // skip GUI self-elevation (used by tests)
     public string? Disk;      // "D:" or physical disk number "3"
     public int Top = 10;
     public int Seconds;       // 0 = run forever
@@ -20,6 +21,7 @@ public sealed class Options
             {
                 case "--cli": o.Cli = true; break;
                 case "--selftest": o.SelfTest = true; break;
+                case "--noelevate": o.NoElevate = true; break;
                 case "--disk":
                     o.Disk = Next();
                     if (o.Disk == null) return false;

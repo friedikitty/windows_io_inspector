@@ -35,7 +35,8 @@ public sealed class MainForm : Form
         }
 
         _filter.DropDownStyle = ComboBoxStyle.DropDownList;
-        _filter.Dock = DockStyle.Top;
+        _filter.Width = 260;
+        _filter.Left = 60; _filter.Top = 4;
         _filterValues.Add(null); _filter.Items.Add("All disks");
         foreach (var d in disks)
         {
@@ -71,9 +72,14 @@ public sealed class MainForm : Form
         var strip = new StatusStrip();
         strip.Items.Add(_status);
 
+        var toolbar = new Panel { Dock = DockStyle.Top, Height = 32 };
+        toolbar.Controls.Add(new Label
+            { Text = "Filter:", Left = 8, Top = 8, AutoSize = true, Font = new Font(Font, FontStyle.Bold) });
+        toolbar.Controls.Add(_filter);
+
         Controls.Add(_grid);
-        Controls.Add(_filter);
         Controls.Add(top);
+        Controls.Add(toolbar);
         Controls.Add(strip);
 
         _tracer.Start();

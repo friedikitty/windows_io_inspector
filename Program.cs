@@ -21,6 +21,13 @@ internal static class Program
         }
         if (o.SelfTest) return SelfTest.Run() ? 0 : 1;
         if (o.Cli) return Cli.Run(o);
+        if (!IsAdmin && !o.NoElevate)
+        {
+            // embedded elevation: restart self with UAC instead of relying on run.bat
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath!)
+                { UseShellExecute = true, Verb = "runas" });
+            return 0;
+        }
         FreeConsole();
         ApplicationConfiguration.Initialize();
         Application.Run(new MainForm());
