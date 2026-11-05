@@ -10,7 +10,8 @@ internal static class Program
             Console.WriteLine(Options.Usage);
             return 2;
         }
-        Console.WriteLine("io_inspector skeleton (iteration 1)");
+        if (o.Cli) return Cli.Run(o);
+        Console.WriteLine("io_inspector: GUI not implemented yet (iteration 2). Use --cli.");
         return 0;
     }
 }
