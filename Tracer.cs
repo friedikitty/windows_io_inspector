@@ -24,6 +24,7 @@ public sealed class Tracer : IDisposable
     private TraceEventSession? _session;
     private Thread? _thread;
     private ConcurrentDictionary<(int pid, string file), long[]> _current = new();
+    private readonly ConcurrentDictionary<(int pid, string file), long[]> _totals = new();
     private readonly ConcurrentDictionary<int, string> _procNames = new();
     private Dictionary<string, string> _volumeToDrive = new(StringComparer.OrdinalIgnoreCase);
 
@@ -74,18 +75,26 @@ public sealed class Tracer : IDisposable
     public List<FileIoRow> Snapshot()
     {
         var snap = Interlocked.Exchange(ref _current, new ConcurrentDictionary<(int, string), long[]>());
-        var rows = new List<FileIoRow>(snap.Count);
-        foreach (var ((pid, file), rw) in snap)
+        foreach (var (key, rw) in snap)
         {
-            if (rw[0] == 0 && rw[1] == 0) continue;
-            rows.Add(new FileIoRow
-            {
-                Pid = pid,
-                Process = ProcessName(pid),
-                File = file,
-                ReadBytes = Interlocked.Read(ref rw[0]),
-                WriteBytes = Interlocked.Read(ref rw[1]),
-            });
+            var total = _totals.GetOrAdd(key, _ => new long[2]);
+            Interlocked.Add(ref total[0], Interlocked.Read(ref rw[0]));
+            Interlocked.Add(ref total[1], Interlocked.Read(ref rw[1]));
+        }
+        return RowsFrom(snap);
+    }
+
+    // Cumulative bytes since Start() (only counts intervals that were Snapshot()ed).
+    public List<FileIoRow> Totals() => RowsFrom(_totals);
+
+    private List<FileIoRow> RowsFrom(IEnumerable<KeyValuePair<(int pid, string file), long[]>> data)
+    {
+        var rows = new List<FileIoRow>();
+        foreach (var ((pid, file), rw) in data)
+        {
+            long r = Interlocked.Read(ref rw[0]), w = Interlocked.Read(ref rw[1]);
+            if (r == 0 && w == 0) continue;
+            rows.Add(new FileIoRow { Pid = pid, Process = ProcessName(pid), File = file, ReadBytes = r, WriteBytes = w });
         }
         rows.Sort((a, b) => b.Total.CompareTo(a.Total));
         return rows;

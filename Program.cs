@@ -20,6 +20,17 @@ internal static class Program
             return 2;
         }
         if (o.SelfTest) return SelfTest.Run() ? 0 : 1;
+        if (o.DetailPid is int dp)
+        {
+            Console.Write(ProcessInfo.Describe(dp));
+            return 0;
+        }
+        if (o.KillPid is int kp)
+        {
+            var err = ProcessInfo.Kill(kp);
+            Console.WriteLine(err == null ? $"killed pid {kp}" : $"kill failed: {err}");
+            return err == null ? 0 : 1;
+        }
         if (o.Cli) return Cli.Run(o);
         if (!IsAdmin && !o.NoElevate)
         {

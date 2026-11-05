@@ -54,6 +54,7 @@ public static class SelfTest
                 }
             }
             Check(seen, "etw: own file write observed");
+            Check(tracer.Totals().Count > 0, "etw: cumulative totals accumulated");
             try { File.Delete(probe); } catch { }
         }
 
@@ -63,6 +64,10 @@ public static class SelfTest
         Check(Tracer.MatchesFile("3", @"F:\x.bin", new List<DiskSample> { d3 })
             && Tracer.MatchesFile("u:", @"U:\x.bin", new List<DiskSample> { d3 })
             && !Tracer.MatchesFile("C:", @"F:\x.bin", new List<DiskSample> { d3 }), "filter: file matching");
+
+        // 5. process info (self)
+        Check(ProcessInfo.Describe(Environment.ProcessId).Contains("IoInspector", StringComparison.OrdinalIgnoreCase),
+            "process info: self describe");
 
         Console.WriteLine(ok ? "SELFTEST OK" : "SELFTEST FAILED");
         return ok;
