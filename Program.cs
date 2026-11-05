@@ -32,6 +32,7 @@ internal static class Program
             return err == null ? 0 : 1;
         }
         if (o.Cli) return Cli.Run(o);
+        if (o.Demo) o.NoElevate = true;   // demo never needs admin
         if (!IsAdmin && !o.NoElevate)
         {
             // embedded elevation: restart self with UAC instead of relying on run.bat
@@ -41,7 +42,7 @@ internal static class Program
         }
         FreeConsole();
         ApplicationConfiguration.Initialize();
-        Application.Run(new MainForm());
+        Application.Run(new MainForm(o));
         return 0;
     }
 }

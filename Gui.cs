@@ -16,10 +16,26 @@ public sealed class MainForm : Form
     private List<DiskSample> _lastDisks = new();
     private string _sortKey = "total";
     private bool _sortAsc;
+    private readonly bool _demo;
+    private readonly Random _rng = new(42);
+    private readonly long[] _demoRw = new long[DemoFiles.Length * 2];
 
-    public MainForm()
+    private static readonly (string proc, int pid, string file)[] DemoFiles =
     {
-        Text = "IO Inspector" + (Program.IsAdmin ? "" : "  (not elevated - no file attribution)");
+        ("browser", 12011, @"D:\demo\cache\segment_0042.dat"),
+        ("python", 12032, @"D:\demo\scripts\train_model.py"),
+        ("builder", 12047, @"F:\demo\build_cache\9F\A1.dat"),
+        ("sync-agent", 12108, @"U:\demo\sync\incoming\report_2026_03.xlsx"),
+        ("indexer", 12155, @"D:\demo\index\segments_3.jdb"),
+        ("media-enc", 12193, @"F:\demo\video\render_output.mp4.part"),
+        ("db-engine", 12244, @"U:\demo\db\data\table_orders.ibd"),
+        ("game", 12307, @"D:\demo\game\pakchunk0.pak"),
+    };
+
+    public MainForm(Options o)
+    {
+        _demo = o.Demo;
+        Text = "IO Inspector" + (_demo ? "  [DEMO]" : Program.IsAdmin ? "" : "  (not elevated - no file attribution)");
         Width = 1150; Height = 680;
         StartPosition = FormStartPosition.CenterScreen;
 
@@ -112,7 +128,15 @@ public sealed class MainForm : Form
         Controls.Add(toolbar);
         Controls.Add(strip);
 
-        StartTracing();
+        if (_demo)
+        {
+            _running = true;
+            _status.Text = "DEMO data - synthetic rows, no tracing";
+        }
+        else
+        {
+            StartTracing();
+        }
         _timer.Tick += (_, _) => Tick();
         _timer.Start();
     }
@@ -130,6 +154,13 @@ public sealed class MainForm : Form
 
     private void ToggleRunning()
     {
+        if (_demo)
+        {
+            _running = !_running;
+            _startStop.Text = _running ? "Stop" : "Start";
+            _status.Text = _running ? "DEMO data - synthetic rows, no tracing" : "demo paused";
+            return;
+        }
         if (_running)
         {
             _tracer.Dispose();
@@ -207,6 +238,17 @@ public sealed class MainForm : Form
             if (!_diskRows.TryGetValue(d.Number, out var row)) continue;
             row.label.Text = $"disk {d.Number} ({d.Letters})  queue {d.Queue:F2}  {d.BytesPerSec / 1048576.0:F1} MB/s";
             row.spark.Add(d.Queue);
+        }
+        if (_demo)
+        {
+            _allRows = DemoFiles.Select((f, i) =>
+            {
+                _demoRw[i * 2] += (long)(_rng.NextDouble() * 6 * 1048576);
+                _demoRw[i * 2 + 1] += (long)(_rng.NextDouble() * 1.5 * 1048576);
+                return new FileIoRow { Pid = f.pid, Process = f.proc, File = f.file, ReadBytes = _demoRw[i * 2], WriteBytes = _demoRw[i * 2 + 1] };
+            }).ToList();
+            RenderRows();
+            return;
         }
         if (!_tracer.Active) return;
         _tracer.Snapshot();                 // flush this interval into the accumulator
