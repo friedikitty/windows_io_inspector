@@ -3,13 +3,18 @@ namespace IoInspector;
 public sealed class MainForm : Form
 {
     private readonly Sampler _sampler = new();
-    private readonly Tracer _tracer = new();
+    private Tracer _tracer = new();
+    private bool _running;
     private readonly Dictionary<int, (Label label, Sparkline spark)> _diskRows = new();
     private readonly DataGridView _grid = new();
     private readonly ComboBox _filter = new();
     private readonly List<string?> _filterValues = new();
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
     private readonly ToolStripStatusLabel _status = new();
+    private readonly Button _startStop = new();
+    private List<FileIoRow> _lastRows = new();
+    private string _sortKey = "total";
+    private bool _sortAsc;
 
     public MainForm()
     {
@@ -35,8 +40,7 @@ public sealed class MainForm : Form
         }
 
         _filter.DropDownStyle = ComboBoxStyle.DropDownList;
-        _filter.Width = 260;
-        _filter.Left = 60; _filter.Top = 4;
+        _filter.Width = 220; _filter.Left = 240; _filter.Top = 5;
         _filterValues.Add(null); _filter.Items.Add("All disks");
         foreach (var d in disks)
         {
@@ -47,6 +51,18 @@ public sealed class MainForm : Form
             }
         }
         _filter.SelectedIndex = 0;
+
+        _startStop.Text = "Stop";
+        _startStop.Left = 8; _startStop.Top = 4; _startStop.Width = 70;
+        _startStop.Click += (_, _) => ToggleRunning();
+        var clear = new Button { Text = "Clear", Left = 86, Top = 4, Width = 70 };
+        clear.Click += (_, _) => ClearAll();
+        var filterLabel = new Label { Text = "Filter:", Left = 170, Top = 9, AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
+        var toolbar = new Panel { Dock = DockStyle.Top, Height = 34 };
+        toolbar.Controls.Add(_startStop);
+        toolbar.Controls.Add(clear);
+        toolbar.Controls.Add(filterLabel);
+        toolbar.Controls.Add(_filter);
 
         _grid.Dock = DockStyle.Fill;
         _grid.ReadOnly = true;
@@ -65,31 +81,111 @@ public sealed class MainForm : Form
         _grid.Columns["read"]!.FillWeight = 45;
         _grid.Columns["write"]!.FillWeight = 45;
         _grid.Columns["total"]!.FillWeight = 45;
+        foreach (DataGridViewColumn c in _grid.Columns) c.SortMode = DataGridViewColumnSortMode.Programmatic;
+        _grid.Columns["total"]!.HeaderCell.SortGlyphDirection = SortOrder.Descending;
+        _grid.ColumnHeaderMouseClick += OnSortClick;
         typeof(DataGridView).GetProperty("DoubleBuffered",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
             .SetValue(_grid, true);
 
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Detail", null, (_, _) => ShowDetail());
+        menu.Items.Add("Terminate", null, (_, _) => TerminateSelected());
+        _grid.ContextMenuStrip = menu;
+        _grid.CellMouseDown += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Right && e.RowIndex >= 0)
+            {
+                _grid.ClearSelection();
+                _grid.Rows[e.RowIndex].Selected = true;
+                _grid.CurrentCell = _grid.Rows[e.RowIndex].Cells[0];
+            }
+        };
+
         var strip = new StatusStrip();
         strip.Items.Add(_status);
-
-        var toolbar = new Panel { Dock = DockStyle.Top, Height = 32 };
-        toolbar.Controls.Add(new Label
-            { Text = "Filter:", Left = 8, Top = 8, AutoSize = true, Font = new Font(Font, FontStyle.Bold) });
-        toolbar.Controls.Add(_filter);
 
         Controls.Add(_grid);
         Controls.Add(top);
         Controls.Add(toolbar);
         Controls.Add(strip);
 
-        _tracer.Start();
-        _status.Text = _tracer.Active ? "ETW: tracing file IO" : "ETW: OFF - " + _tracer.Error + (Program.IsAdmin ? "" : " (run as administrator)");
+        StartTracing();
         _timer.Tick += (_, _) => Tick();
         _timer.Start();
     }
 
+    private void StartTracing()
+    {
+        _tracer = new Tracer();
+        _tracer.Start();
+        _running = true;
+        _startStop.Text = "Stop";
+        _status.Text = _tracer.Active ? "ETW: tracing file IO" : "ETW: OFF - " + _tracer.Error + (Program.IsAdmin ? "" : " (run as administrator)");
+    }
+
+    private void ToggleRunning()
+    {
+        if (_running)
+        {
+            _tracer.Dispose();
+            _running = false;
+            _startStop.Text = "Start";
+            _status.Text = "capture stopped (view frozen)";
+        }
+        else
+        {
+            StartTracing();
+        }
+    }
+
+    private void ClearAll()
+    {
+        foreach (var row in _diskRows.Values) row.spark.Clear();
+        _lastRows = new List<FileIoRow>();
+        _grid.Rows.Clear();
+    }
+
+    private void OnSortClick(object? sender, DataGridViewCellMouseEventArgs e)
+    {
+        var col = _grid.Columns[e.ColumnIndex];
+        if (_sortKey == col.Name) _sortAsc = !_sortAsc;
+        else
+        {
+            _sortKey = col.Name;
+            _sortAsc = col.Name is "proc" or "file";
+        }
+        foreach (DataGridViewColumn c in _grid.Columns) c.HeaderCell.SortGlyphDirection = SortOrder.None;
+        col.HeaderCell.SortGlyphDirection = _sortAsc ? SortOrder.Ascending : SortOrder.Descending;
+        ShowRows(Sorted(_lastRows));
+    }
+
+    private List<FileIoRow> Sorted(List<FileIoRow> rows)
+    {
+        Func<FileIoRow, object> key = _sortKey switch
+        {
+            "proc" => r => r.Process,
+            "pid" => r => r.Pid,
+            "file" => r => r.File,
+            "read" => r => r.ReadBytes,
+            "write" => r => r.WriteBytes,
+            _ => r => r.Total,
+        };
+        return (_sortAsc ? rows.OrderBy(key) : rows.OrderByDescending(key)).ToList();
+    }
+
+    private void ShowRows(List<FileIoRow> rows)
+    {
+        _grid.SuspendLayout();
+        _grid.Rows.Clear();
+        foreach (var r in rows)
+            _grid.Rows.Add(r.Process, r.Pid, r.File, Fmt(r.ReadBytes), Fmt(r.WriteBytes), Fmt(r.Total));
+        _grid.ResumeLayout();
+    }
+
     private void Tick()
     {
+        if (!_running) return;
         List<DiskSample> disks;
         try { disks = _sampler.Sample(); }
         catch { return; }
@@ -101,12 +197,51 @@ public sealed class MainForm : Form
         }
         if (!_tracer.Active) return;
         string? filter = _filterValues[_filter.SelectedIndex];
-        var rows = _tracer.Snapshot().Where(r => Tracer.MatchesFile(filter, r.File, disks)).Take(50).ToList();
-        _grid.SuspendLayout();
-        _grid.Rows.Clear();
-        foreach (var r in rows)
-            _grid.Rows.Add(r.Process, r.Pid, r.File, Fmt(r.ReadBytes), Fmt(r.WriteBytes), Fmt(r.Total));
-        _grid.ResumeLayout();
+        _lastRows = _tracer.Snapshot().Where(r => Tracer.MatchesFile(filter, r.File, disks)).Take(50).ToList();
+        ShowRows(Sorted(_lastRows));
+    }
+
+    private FileIoRow? SelectedRow()
+    {
+        if (_grid.CurrentRow?.Cells["pid"]?.Value is int pid)
+            return _lastRows.FirstOrDefault(r => r.Pid == pid);
+        return null;
+    }
+
+    private void ShowDetail()
+    {
+        var row = SelectedRow();
+        if (row == null) return;
+        using var dlg = new Form
+        {
+            Text = $"Process detail - {row.Process} ({row.Pid})",
+            Width = 800, Height = 480,
+            StartPosition = FormStartPosition.CenterParent,
+        };
+        var text = new TextBox
+        {
+            Multiline = true, ReadOnly = true, Dock = DockStyle.Fill,
+            ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 10),
+            Text = ProcessInfo.Describe(row.Pid),
+        };
+        dlg.Controls.Add(text);
+        dlg.Controls.Add(new Label
+        {
+            Dock = DockStyle.Bottom, Height = 24, TextAlign = ContentAlignment.MiddleLeft,
+            Text = "  File: " + row.File,
+        });
+        dlg.ShowDialog(this);
+    }
+
+    private void TerminateSelected()
+    {
+        var row = SelectedRow();
+        if (row == null) return;
+        if (MessageBox.Show(this, $"Kill {row.Process} (pid {row.Pid}) and its entire process tree?",
+                "Terminate", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+        var err = ProcessInfo.Kill(row.Pid);
+        if (err != null)
+            MessageBox.Show(this, $"Kill failed: {err}", "Terminate", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 
     private static string Fmt(long bytes)
@@ -133,6 +268,12 @@ public sealed class Sparkline : Panel
     {
         _values.Enqueue(v);
         if (_values.Count > Cap) _values.Dequeue();
+        Invalidate();
+    }
+
+    public void Clear()
+    {
+        _values.Clear();
         Invalidate();
     }
 
