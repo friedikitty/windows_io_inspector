@@ -69,6 +69,16 @@ public static class SelfTest
         Check(ProcessInfo.Describe(Environment.ProcessId).Contains("IoInspector", StringComparison.OrdinalIgnoreCase),
             "process info: self describe");
 
+        // 6. summary sorting
+        var sample = new List<FileIoRow>
+        {
+            new() { Pid = 1, Process = "a", File = "z", ReadBytes = 10, WriteBytes = 5 },
+            new() { Pid = 2, Process = "b", File = "y", ReadBytes = 1, WriteBytes = 50 },
+        };
+        Check(Cli.SortedRows(sample, "write", false)[0].Pid == 2
+            && Cli.SortedRows(sample, "pid", true)[0].Pid == 1
+            && Cli.SortedRows(sample, "file", false)[0].File == "z", "summary sort ordering");
+
         Console.WriteLine(ok ? "SELFTEST OK" : "SELFTEST FAILED");
         return ok;
     }
