@@ -43,9 +43,10 @@ public sealed class Tracer : IDisposable
             _session.EnableKernelProvider(
                 KernelTraceEventParser.Keywords.DiskFileIO |
                 KernelTraceEventParser.Keywords.FileIO |
-                KernelTraceEventParser.Keywords.FileIOInit);
-            _session.Source.Kernel.FileIORead += e => Add(e.ProcessID, e.FileName, e.IoSize, 0);
-            _session.Source.Kernel.FileIOWrite += e => Add(e.ProcessID, e.FileName, 0, e.IoSize);
+                KernelTraceEventParser.Keywords.FileIOInit |
+                KernelTraceEventParser.Keywords.Process);
+            _session.Source.Kernel.FileIORead += e => Add(e.ProcessID, e.ProcessName, e.FileName, e.IoSize, 0);
+            _session.Source.Kernel.FileIOWrite += e => Add(e.ProcessID, e.ProcessName, e.FileName, 0, e.IoSize);
             _thread = new Thread(() =>
             {
                 try { _session.Source.Process(); }
@@ -62,9 +63,11 @@ public sealed class Tracer : IDisposable
         }
     }
 
-    private void Add(int pid, string fileName, long read, long write)
+    private void Add(int pid, string? eventProcName, string fileName, long read, long write)
     {
         if (string.IsNullOrEmpty(fileName)) return;
+        // resolve at event time: the process is certainly alive now; it may be dead by snapshot time
+        _procNames.GetOrAdd(pid, _ => !string.IsNullOrEmpty(eventProcName) ? eventProcName : LookupName(pid));
         string file = ToDrivePath(fileName);
         var cell = _current.GetOrAdd((pid, file), _ => new long[2]);
         Interlocked.Add(ref cell[0], read);
@@ -87,6 +90,8 @@ public sealed class Tracer : IDisposable
     // Cumulative bytes since Start() (only counts intervals that were Snapshot()ed).
     public List<FileIoRow> Totals() => RowsFrom(_totals);
 
+    public void ClearTotals() => _totals.Clear();
+
     private List<FileIoRow> RowsFrom(IEnumerable<KeyValuePair<(int pid, string file), long[]>> data)
     {
         var rows = new List<FileIoRow>();
@@ -100,14 +105,14 @@ public sealed class Tracer : IDisposable
         return rows;
     }
 
-    private string ProcessName(int pid)
+    private string ProcessName(int pid) => _procNames.TryGetValue(pid, out var n) ? n : LookupName(pid);
+
+    // never cache failures: a pid unknown now may be resolvable at the next event
+    private static string LookupName(int pid)
     {
         if (pid == 0) return "System";
-        return _procNames.GetOrAdd(pid, p =>
-        {
-            try { using var proc = System.Diagnostics.Process.GetProcessById(p); return proc.ProcessName; }
-            catch { return "pid " + p; }
-        });
+        try { using var proc = System.Diagnostics.Process.GetProcessById(pid); return proc.ProcessName; }
+        catch { return "pid " + pid; }
     }
 
     // "\Device\HarddiskVolume5\foo\bar" -> "C:\foo\bar"

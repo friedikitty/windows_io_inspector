@@ -12,7 +12,8 @@ public sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1000 };
     private readonly ToolStripStatusLabel _status = new();
     private readonly Button _startStop = new();
-    private List<FileIoRow> _lastRows = new();
+    private List<FileIoRow> _allRows = new();   // cumulative, unfiltered
+    private List<DiskSample> _lastDisks = new();
     private string _sortKey = "total";
     private bool _sortAsc;
 
@@ -51,6 +52,7 @@ public sealed class MainForm : Form
             }
         }
         _filter.SelectedIndex = 0;
+        _filter.SelectedIndexChanged += (_, _) => RenderRows();
 
         _startStop.Text = "Stop";
         _startStop.Left = 8; _startStop.Top = 4; _startStop.Width = 70;
@@ -72,9 +74,9 @@ public sealed class MainForm : Form
         _grid.Columns.Add("proc", "Process");
         _grid.Columns.Add("pid", "PID");
         _grid.Columns.Add("file", "File");
-        _grid.Columns.Add("read", "Read/s");
-        _grid.Columns.Add("write", "Write/s");
-        _grid.Columns.Add("total", "Total/s");
+        _grid.Columns.Add("read", "Read");
+        _grid.Columns.Add("write", "Write");
+        _grid.Columns.Add("total", "Total");
         _grid.Columns["pid"]!.FillWeight = 30;
         _grid.Columns["proc"]!.FillWeight = 70;
         _grid.Columns["file"]!.FillWeight = 140;
@@ -120,8 +122,10 @@ public sealed class MainForm : Form
         _tracer = new Tracer();
         _tracer.Start();
         _running = true;
+        _allRows = new List<FileIoRow>();
+        RenderRows();
         _startStop.Text = "Stop";
-        _status.Text = _tracer.Active ? "ETW: tracing file IO" : "ETW: OFF - " + _tracer.Error + (Program.IsAdmin ? "" : " (run as administrator)");
+        _status.Text = _tracer.Active ? "ETW: tracing file IO (accumulating since Start)" : "ETW: OFF - " + _tracer.Error + (Program.IsAdmin ? "" : " (run as administrator)");
     }
 
     private void ToggleRunning()
@@ -141,8 +145,9 @@ public sealed class MainForm : Form
 
     private void ClearAll()
     {
+        _tracer.ClearTotals();
+        _allRows = new List<FileIoRow>();
         foreach (var row in _diskRows.Values) row.spark.Clear();
-        _lastRows = new List<FileIoRow>();
         _grid.Rows.Clear();
     }
 
@@ -157,7 +162,14 @@ public sealed class MainForm : Form
         }
         foreach (DataGridViewColumn c in _grid.Columns) c.HeaderCell.SortGlyphDirection = SortOrder.None;
         col.HeaderCell.SortGlyphDirection = _sortAsc ? SortOrder.Ascending : SortOrder.Descending;
-        ShowRows(Sorted(_lastRows));
+        RenderRows();
+    }
+
+    private void RenderRows()
+    {
+        string? filter = _filterValues[_filter.SelectedIndex];
+        var rows = _allRows.Where(r => Tracer.MatchesFile(filter, r.File, _lastDisks));
+        ShowRows(Sorted(rows.ToList()).Take(50).ToList());
     }
 
     private List<FileIoRow> Sorted(List<FileIoRow> rows)
@@ -189,6 +201,7 @@ public sealed class MainForm : Form
         List<DiskSample> disks;
         try { disks = _sampler.Sample(); }
         catch { return; }
+        _lastDisks = disks;
         foreach (var d in disks)
         {
             if (!_diskRows.TryGetValue(d.Number, out var row)) continue;
@@ -196,15 +209,17 @@ public sealed class MainForm : Form
             row.spark.Add(d.Queue);
         }
         if (!_tracer.Active) return;
-        string? filter = _filterValues[_filter.SelectedIndex];
-        _lastRows = _tracer.Snapshot().Where(r => Tracer.MatchesFile(filter, r.File, disks)).Take(50).ToList();
-        ShowRows(Sorted(_lastRows));
+        _tracer.Snapshot();                 // flush this interval into the accumulator
+        _allRows = _tracer.Totals();        // cumulative since Start/Clear - stable, analyzable
+        RenderRows();
     }
 
     private FileIoRow? SelectedRow()
     {
-        if (_grid.CurrentRow?.Cells["pid"]?.Value is int pid)
-            return _lastRows.FirstOrDefault(r => r.Pid == pid);
+        if (_grid.CurrentRow?.Cells["pid"]?.Value is int pid
+            && _grid.CurrentRow.Cells["file"]?.Value is string file)
+            return _allRows.FirstOrDefault(r => r.Pid == pid && r.File == file)
+                ?? _allRows.FirstOrDefault(r => r.Pid == pid);
         return null;
     }
 

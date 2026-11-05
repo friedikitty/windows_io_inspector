@@ -55,6 +55,8 @@ public static class SelfTest
             }
             Check(seen, "etw: own file write observed");
             Check(tracer.Totals().Count > 0, "etw: cumulative totals accumulated");
+            Check(tracer.Totals().Any(r => r.File.Contains("io_inspector_selftest", StringComparison.OrdinalIgnoreCase)
+                && r.Process.Contains("IoInspector", StringComparison.OrdinalIgnoreCase)), "etw: process name resolved");
             try { File.Delete(probe); } catch { }
         }
 
